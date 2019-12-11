@@ -3,6 +3,8 @@
 
 namespace Microsoft.Azure.Amqp.Serialization
 {
+    using System;
+
     sealed class SerialiableMember
     {
         public string Name
@@ -23,7 +25,13 @@ namespace Microsoft.Azure.Amqp.Serialization
             set;
         }
 
-        public MemberAccessor Accessor
+        public Func<object, object> Get
+        {
+            get;
+            set;
+        }
+
+        public Action<object, object> Set
         {
             get;
             set;

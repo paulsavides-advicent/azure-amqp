@@ -41,9 +41,12 @@ namespace Microsoft.Azure.Amqp.Serialization
             { typeof(object),   new SerializableType.Object(typeof(object)) },
         };
 
+        static IDelegateFactory defaultDelegateFactory = new DelegateFactory();
         static readonly AmqpContractSerializer Instance = new AmqpContractSerializer();
+
         readonly ConcurrentDictionary<Type, SerializableType> customTypeCache;
         readonly List<Func<Type, SerializableType>> externalCompilers;
+        IDelegateFactory delegateFactory;
 
         static AmqpContractSerializer()
         {
@@ -73,17 +76,29 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// </summary>
         public AmqpContractSerializer()
         {
+            this.delegateFactory = defaultDelegateFactory;
             this.customTypeCache = new ConcurrentDictionary<Type, SerializableType>();
         }
 
         /// <summary>
         /// Initializes the object with external type resolvers.
         /// </summary>
-        /// <param name="compiler"></param>
+        /// <param name="compiler">The external type resolver.</param>
         public AmqpContractSerializer(Func<Type, SerializableType> compiler)
             : this()
         {
             this.externalCompilers = new List<Func<Type, SerializableType>>() { compiler };
+        }
+
+        /// <summary>
+        /// Initializes the object with external type resolvers and a delegate facgtory.
+        /// </summary>
+        /// <param name="compiler">The external type resolver.</param>
+        /// <param name="delegateFactory">The delegate factory.</param>
+        public AmqpContractSerializer(Func<Type, SerializableType> compiler, IDelegateFactory delegateFactory)
+            : this(compiler)
+        {
+            this.delegateFactory = delegateFactory;
         }
 
         /// <summary>
@@ -311,7 +326,7 @@ namespace Microsoft.Azure.Amqp.Serialization
 
             int lastOrder = memberList.Count + 1;
             MemberInfo[] memberInfos = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            MethodAccessor onDeserialized = null;
+            Action<object> onDeserialized = null;
             foreach (MemberInfo memberInfo in memberInfos)
             {
                 if (memberInfo.DeclaringType != type)
@@ -333,20 +348,33 @@ namespace Microsoft.Azure.Amqp.Serialization
                     member.Name = attribute.Name ?? memberInfo.Name;
                     member.Order = attribute.InternalOrder ?? lastOrder++;
                     member.Mandatory = attribute.Mandatory;
-                    member.Accessor = MemberAccessor.Create(memberInfo, true);
-
-                    // This will recursively resolve member types
-                    Type memberType = memberInfo is FieldInfo ? ((FieldInfo)memberInfo).FieldType : ((PropertyInfo)memberInfo).PropertyType;
-                    member.Type = GetType(memberType);
+                    if (memberInfo is FieldInfo)
+                    {
+                        var fieldInfo = (FieldInfo)memberInfo;
+                        member.Get = this.delegateFactory.Create<Func<object, object>>(fieldInfo);
+                        member.Set = this.delegateFactory.Create<Action<object, object>>(fieldInfo);
+                        member.Type = GetType(fieldInfo.FieldType);
+                    }
+                    else
+                    {
+                        var propertyInfo = (PropertyInfo)memberInfo;
+                        member.Type = GetType(propertyInfo.PropertyType);
+                        member.Get = this.delegateFactory.Create<Func<object, object>>(propertyInfo.GetMethod);
+                        if (propertyInfo.SetMethod != null)
+                        {
+                            member.Set = this.delegateFactory.Create<Action<object, object>>(propertyInfo.SetMethod);
+                        }
+                    }
 
                     memberList.Add(member);
                 }
                 else if (memberInfo is MethodInfo)
                 {
+                    var methodInfo = (MethodInfo)memberInfo;
                     var memberAttributes = memberInfo.GetCustomAttributes(typeof(OnDeserializedAttribute), false);
-                    if (memberAttributes.Count() == 1)
+                    if (memberAttributes.Length == 1)
                     {
-                        onDeserialized = MethodAccessor.Create((MethodInfo)memberInfo);
+                        onDeserialized = this.delegateFactory.Create<Action<object>>(methodInfo);
                     }
                 }
             }
@@ -421,7 +449,7 @@ namespace Microsoft.Azure.Amqp.Serialization
                         listType = typeof(List<>).MakeGenericType(argTypes);
                     }
 
-                    MethodAccessor addAccess = MethodAccessor.Create(listType.GetMethod("Add", new Type[] { itemType }));
+                    var addAccess = this.delegateFactory.Create<Action<object, object>>(listType.GetMethod("Add", new Type[] { itemType }));
                     return new SerializableType.List(this, listType, itemType, addAccess) { Final = true };
                 }
 
@@ -460,18 +488,20 @@ namespace Microsoft.Azure.Amqp.Serialization
                     {
                         Type[] argTypes = it.GetGenericArguments();
                         Type itemType = typeof(KeyValuePair<,>).MakeGenericType(argTypes);
-                        MemberAccessor keyAccessor = MemberAccessor.Create(itemType.GetProperty("Key"), false);
-                        MemberAccessor valueAccessor = MemberAccessor.Create(itemType.GetProperty("Value"), false);
-                        MethodAccessor addAccess = MethodAccessor.Create(type.GetMethod("Add", argTypes));
+                        var keyAccessor = this.delegateFactory.Create<Func<object, object>>(itemType.GetProperty("Key").GetMethod);
+                        var valueAccessor = this.delegateFactory.Create<Func<object, object>>(itemType.GetProperty("Value").GetMethod);
+                        var addAccess = this.delegateFactory.Create<Action<object, object, object>>(type.GetMethod("Add", argTypes));
+                        SerializableType keyType = GetType(argTypes[0]);
+                        SerializableType valueType = GetType(argTypes[1]);
 
-                        return new SerializableType.Map(this, type, keyAccessor, valueAccessor, addAccess);
+                        return new SerializableType.Map(this, type, keyType, valueType, keyAccessor, valueAccessor, addAccess);
                     }
 
                     if (genericTypeDef == typeof(ICollection<>))
                     {
                         Type[] argTypes = it.GetGenericArguments();
                         Type itemType = argTypes[0];
-                        MethodAccessor addAccess = MethodAccessor.Create(type.GetMethod("Add", argTypes));
+                        var addAccess = this.delegateFactory.Create<Action<object, object>>(type.GetMethod("Add", argTypes));
 
                         return new SerializableType.List(this, type, itemType, addAccess);
                     }
