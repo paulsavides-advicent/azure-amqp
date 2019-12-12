@@ -45,7 +45,7 @@ namespace Microsoft.Azure.Amqp.Serialization
         static readonly AmqpContractSerializer Instance = new AmqpContractSerializer();
 
         readonly ConcurrentDictionary<Type, SerializableType> customTypeCache;
-        readonly List<Func<Type, SerializableType>> externalCompilers;
+        readonly Func<Type, SerializableType> externalCompiler;
         IDelegateFactory delegateFactory;
 
         static AmqpContractSerializer()
@@ -75,9 +75,8 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// Initializes the object.
         /// </summary>
         public AmqpContractSerializer()
+            : this(null, defaultDelegateFactory)
         {
-            this.delegateFactory = defaultDelegateFactory;
-            this.customTypeCache = new ConcurrentDictionary<Type, SerializableType>();
         }
 
         /// <summary>
@@ -85,9 +84,8 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// </summary>
         /// <param name="compiler">The external type resolver.</param>
         public AmqpContractSerializer(Func<Type, SerializableType> compiler)
-            : this()
+            : this(compiler, defaultDelegateFactory)
         {
-            this.externalCompilers = new List<Func<Type, SerializableType>>() { compiler };
         }
 
         /// <summary>
@@ -96,9 +94,10 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// <param name="compiler">The external type resolver.</param>
         /// <param name="delegateFactory">The delegate factory.</param>
         public AmqpContractSerializer(Func<Type, SerializableType> compiler, IDelegateFactory delegateFactory)
-            : this(compiler)
         {
+            this.externalCompiler = compiler;
             this.delegateFactory = delegateFactory;
+            this.customTypeCache = new ConcurrentDictionary<Type, SerializableType>();
         }
 
         /// <summary>
@@ -264,15 +263,12 @@ namespace Microsoft.Azure.Amqp.Serialization
 
         SerializableType CompileType(Type type, bool describedOnly)
         {
-            if (this.externalCompilers != null)
+            if (this.externalCompiler != null)
             {
-                foreach (var compiler in this.externalCompilers)
+                SerializableType serializable = this.externalCompiler(type);
+                if (serializable != null)
                 {
-                    SerializableType serializable = compiler(type);
-                    if (serializable != null)
-                    {
-                        return serializable;
-                    }
+                    return serializable;
                 }
             }
 
@@ -359,10 +355,10 @@ namespace Microsoft.Azure.Amqp.Serialization
                     {
                         var propertyInfo = (PropertyInfo)memberInfo;
                         member.Type = GetType(propertyInfo.PropertyType);
-                        member.Get = this.delegateFactory.Create<Func<object, object>>(propertyInfo.GetMethod);
-                        if (propertyInfo.SetMethod != null)
+                        member.Get = this.delegateFactory.Create<Func<object, object>>(propertyInfo.GetGetMethod(true));
+                        if (propertyInfo.GetSetMethod(true) != null)
                         {
-                            member.Set = this.delegateFactory.Create<Action<object, object>>(propertyInfo.SetMethod);
+                            member.Set = this.delegateFactory.Create<Action<object, object>>(propertyInfo.GetSetMethod(true));
                         }
                     }
 

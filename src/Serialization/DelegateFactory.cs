@@ -14,7 +14,7 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// <summary>
         /// Creates a delegate to get or set a field.
         /// </summary>
-        /// <typeparam name="T">A Func for getter or an Action for setter.</typeparam>
+        /// <typeparam name="T">A Func&lt;object,object&gt; for getter or an Action&lt;object,object&gt; for setter.</typeparam>
         /// <param name="fieldInfo">The field info.</param>
         /// <returns>The delegate.</returns>
         T Create<T>(FieldInfo fieldInfo);
@@ -22,8 +22,10 @@ namespace Microsoft.Azure.Amqp.Serialization
         /// <summary>
         /// Creates a delegate to invoke a method.
         /// </summary>
-        /// <typeparam name="T">The delegate.</typeparam>
-        /// <param name="methodInfo">The method info.</param>
+        /// <typeparam name="T">The delegate of type Action&lt;object&gt;, or Action&lt;object,object&gt;,
+        /// or Action&lt;object,object,object&gt; or Func&lt;object,object&gt;.</typeparam>
+        /// <param name="methodInfo">The method info. The number of generic arguments in T must be one greater
+        /// than the number of parameters in the method.</param>
         /// <returns>The delegate.</returns>
         /// <remarks>The delegate type must match the method info.</remarks>
         T Create<T>(MethodInfo methodInfo);

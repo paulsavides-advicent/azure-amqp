@@ -724,58 +724,20 @@
         }
 
         [Fact]
-        public void AmqpSerializerListEncodingTest()
+        public void AmqpDefaultSerializerListEncodingTest()
         {
-            Action<Person, Person> personValidator = (p1, p2) =>
-            {
-                Assert.NotNull(p2);
-                Assert.True(21 == p2.Age, "Age should be increased by OnDeserialized");
-                Assert.Equal(p1.GetType().Name, p2.GetType().Name);
-                Assert.Equal(p1.DateOfBirth.Value, p2.DateOfBirth.Value);
-                Assert.Equal(p1.Properties.Count, p2.Properties.Count);
-                foreach (var k in p1.Properties.Keys)
-                {
-                    Assert.Equal(p1.Properties[k], p2.Properties[k]);
-                }
-            };
-
-            Action<List<int>, List<int>> gradesValidator = (l1, l2) =>
-            {
-                if (l1 == null || l2 == null)
-                {
-                    Assert.True(l1 == null && l2 == null);
-                    return;
-                }
-
-                Assert.Equal(l1.Count, l2.Count);
-                for (int i = 0; i < l1.Count; ++i)
-                {
-                    Assert.Equal(l1[i], l2[i]);
-                }
-            };
-
-            // Create an object to be serialized
-            Person p = new Student("Tom")
-                {
-                    Address = new Address() { FullAddress = new string('B', 1024) }, 
-                    Grades = new List<int>() { 1, 2, 3, 4, 5 }
-                };
-            p.Age = 20;
-            p.DateOfBirth = new DateTime(1980, 5, 12, 10, 2, 45, DateTimeKind.Utc);
-            p.Properties.Add("height", 6.1);
-            p.Properties.Add("male", true);
-            p.Properties.Add("nick-name", "big foot");
+            Person p = CreatePerson();
 
             var stream = new MemoryStream(new byte[4096], 0, 4096, true, true);
             AmqpContractSerializer.WriteObject(stream, p);
             stream.Flush();
-            
+
             // Deserialize and verify
             stream.Seek(0, SeekOrigin.Begin);
             Person p3 = AmqpContractSerializer.ReadObject<Person>(stream);
-            personValidator(p, p3);
+            ValidatePerson(p, p3);
             Assert.Equal(((Student)p).Address.FullAddress, ((Student)p3).Address.FullAddress);
-            gradesValidator(((Student)p).Grades, ((Student)p3).Grades);
+            EnsureEqual(((Student)p).Grades, ((Student)p3).Grades);
 
             // Inter-op: it should be an AMQP described list as other clients see it
             stream.Seek(0, SeekOrigin.Begin);
@@ -794,19 +756,63 @@
             Assert.Equal(((AmqpMap)lv[4])[new MapKey("male")], p.Properties["male"]);
             Assert.Equal(((AmqpMap)lv[4])[new MapKey("nick-name")], p.Properties["nick-name"]);
             Assert.True(lv[5] is List<object>);
+        }
 
-            // Non-default serializer
-            AmqpContractSerializer serializer = new AmqpContractSerializer();
+        [Fact]
+        public void AmqpInstanceSerializerListEncodingTest()
+        {
+            AmqpSerializerListEncodingTest(new AmqpContractSerializer());
+        }
+
+        [Fact]
+        public void AmqpInstanceSerializerMapEncodingTest()
+        {
+            AmqpSerializerMapEncodingTest(new AmqpContractSerializer());
+        }
+
+        [Fact]
+        public void AmqpDynamicDelegateFactoryTest()
+        {
+            var delegateFactory = new DynamicDelegateFactory();
+            var serializer = new AmqpContractSerializer(null, delegateFactory);
+            AmqpSerializerListEncodingTest(serializer);
+            AmqpSerializerMapEncodingTest(serializer);
+        }
+
+#if !NETCOREAPP && !WINDOWS_UWP
+        [Fact]
+        public void AmqpExceptionSerializeTest()
+        {
+            const string errorDescription = "No link found...";
+            var amqpException1 = new AmqpException(AmqpErrorCode.NotFound, errorDescription);
+
+            IFormatter formatter = new NetDataContractSerializer();
+            using (MemoryStream memoryStream = new MemoryStream())
+            {
+                formatter.Serialize(memoryStream, amqpException1);
+                memoryStream.Position = 0;
+                AmqpException amqpException2 = (AmqpException)formatter.Deserialize(memoryStream);
+                Assert.False(object.ReferenceEquals(amqpException1, amqpException2), "Exceptions should not be the same instance!");
+                Assert.Equal(amqpException1.Message, amqpException2.Message);
+                Assert.Equal(amqpException1.Error.Condition, amqpException2.Error.Condition);
+                Assert.Equal(amqpException1.Error.Description, amqpException2.Error.Description);
+            }
+        }
+#endif
+
+        static void AmqpSerializerListEncodingTest(AmqpContractSerializer serializer)
+        {
+            Person p = CreatePerson();
             ByteBuffer bf1 = new ByteBuffer(1024, true);
             serializer.WriteObjectToBuffer(bf1, p);
 
             Person p4 = serializer.ReadObjectFromBuffer<Person, Person>(bf1);
-            personValidator(p, p4);
+            ValidatePerson(p, p4);
 
             // Extensible: more items in the payload should not break
             DescribedType dl2 = new DescribedType(
                 new AmqpSymbol("teacher"),
-                new List<object>() { "Jerry", 40, null, 50000, lv[4], null, null, "unknown-string", true, new AmqpSymbol("unknown-symbol")});
+                new List<object>() { "Jerry", 40, null, 50000, new AmqpMap(), null, null, "unknown-string", true, new AmqpSymbol("unknown-symbol") });
             ByteBuffer bf2 = new ByteBuffer(1024, true);
             AmqpEncoding.EncodeObject(dl2, bf2);
             AmqpCodec.EncodeULong(100ul, bf2);
@@ -835,8 +841,7 @@
             Assert.Equal(teacher.Classes[205], ((Teacher)p6).Classes[205]);
         }
 
-        [Fact]
-        public void AmqpSerializerMapEncodingTest()
+        static void AmqpSerializerMapEncodingTest(AmqpContractSerializer serializer)
         {
             NamedList<string> list = new NamedList<string>()
             {
@@ -844,7 +849,6 @@
                 List = new string[] { "v1", "v2" }
             };
 
-            AmqpContractSerializer serializer = new AmqpContractSerializer();
             ByteBuffer b = new ByteBuffer(1024, true);
             serializer.WriteObjectToBuffer(b, list);
 
@@ -853,26 +857,35 @@
             EnsureEqual((IList)list.List, (IList)result.List);
         }
 
-#if !NETCOREAPP && !WINDOWS_UWP
-        [Fact]
-        public void AmqpExceptionSerializeTest()
+        static Person CreatePerson()
         {
-            const string errorDescription = "No link found...";
-            var amqpException1 = new AmqpException(AmqpErrorCode.NotFound, errorDescription);
-
-            IFormatter formatter = new NetDataContractSerializer();
-            using (MemoryStream memoryStream = new MemoryStream())
+            // Create an object to be serialized
+            Person p = new Student("Tom")
             {
-                formatter.Serialize(memoryStream, amqpException1);
-                memoryStream.Position = 0;
-                AmqpException amqpException2 = (AmqpException)formatter.Deserialize(memoryStream);
-                Assert.False(object.ReferenceEquals(amqpException1, amqpException2), "Exceptions should not be the same instance!");
-                Assert.Equal(amqpException1.Message, amqpException2.Message);
-                Assert.Equal(amqpException1.Error.Condition, amqpException2.Error.Condition);
-                Assert.Equal(amqpException1.Error.Description, amqpException2.Error.Description);
+                Address = new Address() { FullAddress = new string('B', 1024) },
+                Grades = new List<int>() { 1, 2, 3, 4, 5 }
+            };
+            p.Age = 20;
+            p.DateOfBirth = new DateTime(1980, 5, 12, 10, 2, 45, DateTimeKind.Utc);
+            p.Properties.Add("height", 6.1);
+            p.Properties.Add("male", true);
+            p.Properties.Add("nick-name", "big foot");
+
+            return p;
+        }
+
+        static void ValidatePerson(Person p1, Person p2)
+        {
+            Assert.NotNull(p2);
+            Assert.True(21 == p2.Age, "Age should be increased by OnDeserialized");
+            Assert.Equal(p1.GetType().Name, p2.GetType().Name);
+            Assert.Equal(p1.DateOfBirth.Value, p2.DateOfBirth.Value);
+            Assert.Equal(p1.Properties.Count, p2.Properties.Count);
+            foreach (var k in p1.Properties.Keys)
+            {
+                Assert.Equal(p1.Properties[k], p2.Properties[k]);
             }
         }
-#endif
 
         static void EncodeDescribedList(ByteBuffer buffer, object descriptor, params object[] values)
         {
@@ -898,7 +911,7 @@
             }
         }
 
-        void EnsureEqual(byte[] data1, int offset1, int count1, byte[] data2, int offset2, int count2)
+        static void EnsureEqual(byte[] data1, int offset1, int count1, byte[] data2, int offset2, int count2)
         {
             Assert.True(count1 == count2, "Count is not equal.");
             for (int i = 0; i < count1; ++i)
@@ -909,7 +922,7 @@
             }
         }
 
-        void EnsureEqual(IList list1, IList list2)
+        static void EnsureEqual(IList list1, IList list2)
         {
             if (list1 == null && list2 == null)
             {
@@ -925,7 +938,7 @@
             }
         }
 
-        void EnsureEqual(DateTime d1, DateTime d2)
+        static void EnsureEqual(DateTime d1, DateTime d2)
         {
             Assert.True(Math.Abs((d1.ToUniversalTime() - d2.ToUniversalTime()).TotalMilliseconds) < 5, "Datetime difference is greater than 5ms.");
         }

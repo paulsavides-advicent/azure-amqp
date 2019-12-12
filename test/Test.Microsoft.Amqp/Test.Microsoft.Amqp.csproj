@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <Compile Include="..\Common\AmqpUtils.cs" Link="Common\AmqpUtils.cs" />
+    <Compile Include="..\Common\DynamicDelegateFactory.cs" Link="Common\DynamicDelegateFactory.cs" />
     <Compile Include="..\Common\Person.cs" Link="Common\Person.cs" />
     <Compile Include="..\Common\TestAmqpBrokerFixture.cs" Link="Common\TestAmqpBrokerFixture.cs" />
     <Compile Include="..\Common\TestCategory.cs" Link="Common\TestCategory.cs" />
